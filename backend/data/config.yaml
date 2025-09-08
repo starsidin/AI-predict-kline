@@ -1,0 +1,37 @@
+# 可选 market：spot / futures-um / futures-cm / options
+# 可选 datatype：klines / trades / aggTrades
+# klines 需要 interval（如 1m,5m,1h,1d,1w,1M）
+# start / end 为月份范围：YYYY-MM
+# symbols 支持一个或多个交易对，如 [BTCUSDT, ETHUSDT]
+# out 为保存根目录；verify 启用后会下载并校验 .CHECKSUM
+# unzip/merge 用于是否自动解压与按月合并为单一CSV（可选）
+
+
+jobs:
+  - name: spot_btc_15m_klines
+    market: spot
+    datatype: klines
+    symbols: [BTCUSDT]
+    interval: 15m
+    start: 2020-01
+    end: 2025-08
+    out: ./data/spot_btc_15m_klines
+    workers: 8
+    verify: true
+    timeout: 30
+    unzip: true # 可选：下载后解压zip
+    merge: false # 可选：将解压得到的同结构CSV合并为一个
+
+
+# - name: um_trades_btc
+# market: futures-um
+# datatype: trades
+# symbols: [BTCUSDT]
+# start: 2020-01
+# end: 2025-08
+# out: ./data
+# workers: 6
+# verify: false
+# timeout: 30
+# unzip: true
+# merge: true

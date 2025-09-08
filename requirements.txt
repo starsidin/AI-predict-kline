@@ -1,0 +1,183 @@
+# AI量化交易预测系统依赖包
+# 基础数据处理
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# 机器学习
+scikit-learn>=1.0.0
+joblib>=1.1.0
+
+# 深度学习
+tensorflow>=2.8.0
+keras>=2.8.0
+
+# 强化学习 (Stable Baselines)
+stable-baselines3>=1.6.0
+gym>=0.21.0
+gymnasium>=0.26.0
+
+# 技术指标计算
+ta>=0.10.0
+TA-Lib>=0.4.24
+
+# 数据获取
+requests>=2.28.0
+ccxt>=2.0.0
+yfinance>=0.1.87
+
+# 可视化
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.10.0
+kaleido>=0.2.1
+
+# 数据存储
+sqlalchemy>=1.4.0
+psycopg2-binary>=2.9.0
+pymongo>=4.0.0
+h5py>=3.7.0
+
+# 配置管理
+pyyaml>=6.0
+configparser>=5.2.0
+python-dotenv>=0.19.0
+
+# 日志和监控
+loguru>=0.6.0
+tqdm>=4.64.0
+
+# 时间处理
+python-dateutil>=2.8.0
+pytz>=2022.1
+
+# 数值计算优化
+numba>=0.56.0
+
+# 统计分析
+statsmodels>=0.13.0
+
+# 网络请求
+httpx>=0.23.0
+aiohttp>=3.8.0
+
+# 数据验证
+pydantic>=1.9.0
+
+# 测试
+pytest>=7.0.0
+pytest-cov>=3.0.0
+
+# 代码质量
+black>=22.0.0
+flake8>=4.0.0
+isort>=5.10.0
+
+# Jupyter支持
+jupyter>=1.0.0
+ipykernel>=6.15.0
+
+# 性能分析
+memory-profiler>=0.60.0
+line-profiler>=3.5.0
+
+# 并行处理
+joblib>=1.1.0
+multiprocessing-logging>=0.3.4
+
+# 金融数据
+quandl>=3.7.0
+fredapi>=0.4.3
+
+# 回测框架
+backtrader>=1.9.76
+zipline-reloaded>=2.2.0
+
+# 风险管理
+riskfolio-lib>=3.0.0
+empyrical>=0.5.5
+
+# 优化算法
+scipy>=1.7.0
+optuna>=3.0.0
+
+# 时间序列
+sktime>=0.13.0
+arch>=5.3.0
+
+# 特征工程
+feature-engine>=1.4.0
+tsfresh>=0.19.0
+
+# 模型解释
+shap>=0.41.0
+lime>=0.2.0
+
+# API开发
+fastapi>=0.85.0
+uvicorn>=0.18.0
+starlette>=0.20.0
+
+# 数据库连接
+redis>=4.3.0
+
+# 加密和安全
+cryptography>=37.0.0
+
+# 环境变量
+python-decouple>=3.6
+
+# 文档生成
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.0.0
+
+# 类型检查
+mypy>=0.971
+
+# 进度条
+rich>=12.5.0
+
+# 配置文件
+toml>=0.10.2
+
+# 数据压缩
+lz4>=4.0.0
+
+# 内存映射
+numpy-financial>=1.0.0
+
+# 并发处理
+concurrent-futures>=3.1.1
+
+# 系统监控
+psutil>=5.9.0
+
+# 邮件通知
+yagmail>=0.15.0
+
+# 消息队列
+celery>=5.2.0
+redis>=4.3.0
+
+# 缓存
+diskcache>=5.4.0
+
+# 数据流
+apache-airflow>=2.4.0
+
+# 模型版本控制
+mlflow>=1.28.0
+
+# 实验跟踪
+wandb>=0.13.0
+
+# 模型部署
+bentoml>=1.0.0
+
+# 容器化
+docker>=6.0.0
+
+# 云服务
+boto3>=1.24.0
+azure-storage-blob>=12.13.0
+google-cloud-storage>=2.5.0
