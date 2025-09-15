@@ -24,7 +24,22 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential, Model
-    from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, Input, Conv1D, MaxPooling1D, Flatten
+    from tensorflow.keras.layers import (
+        LSTM,
+        GRU,
+        Dense,
+        Dropout,
+        Input,
+        Conv1D,
+        MaxPooling1D,
+        Flatten,
+        GlobalAveragePooling1D,
+        Concatenate,
+        LayerNormalization,
+        Add,
+        Lambda,
+        MultiHeadAttention,
+    )
     from tensorflow.keras.optimizers import Adam
     from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
     TENSORFLOW_AVAILABLE = True
@@ -229,8 +244,206 @@ class ModelTrainer:
             loss='sparse_categorical_crossentropy' if num_classes > 2 else 'binary_crossentropy',
             metrics=['accuracy']
         )
-        
+
         return model
+
+    def create_tcn_model(
+        self,
+        short_shape: Tuple[int, int],
+        long_shape: Tuple[int, int],
+        num_classes: int = 2,
+        loss_type: str = "crossentropy",
+    ) -> Optional[Model]:
+        """创建双输入的TCN/1D CNN模型
+
+        此处的短分支接收15分钟K线的原始特征序列，长分支接收根据均线计算的序列，
+        以避免直接使用日线造成的信息泄露。
+
+        Args:
+            short_shape: 短期分支输入形状 ``(时间步, 特征数)``
+            long_shape:  长期分支输入形状 ``(时间步, 特征数)``
+            num_classes: 分类类别数
+            loss_type:   ``"crossentropy"`` 使用交叉熵；``"focal"`` 使用focal loss
+
+        Returns:
+            构建好的 ``tf.keras.Model`` 模型实例
+        """
+
+        if not TENSORFLOW_AVAILABLE:
+            print("TensorFlow未安装，无法创建TCN模型")
+            return None
+
+        short_in = Input(shape=short_shape)
+        long_in = Input(shape=long_shape)
+
+        def tcn_block(x: tf.Tensor, filters: int) -> tf.Tensor:
+            """TCN核心模块，包含多层空洞卷积与残差连接"""
+            for d in [1, 2, 4, 8, 16]:
+                residual = x
+                x = Conv1D(
+                    filters,
+                    kernel_size=3,
+                    padding="causal",
+                    dilation_rate=d,
+                    activation="relu",
+                    kernel_regularizer=tf.keras.regularizers.l2(1e-4),
+                )(x)
+                x = LayerNormalization()(x)
+                x = Dropout(0.1)(x)
+                if residual.shape[-1] != x.shape[-1]:
+                    residual = Conv1D(filters, 1, padding="same")(residual)
+                x = Add()([x, residual])
+            return x
+
+        short_branch = tcn_block(short_in, 32)
+        short_pool = GlobalAveragePooling1D()(short_branch)
+
+        long_branch = tcn_block(long_in, 48)
+        long_pool = GlobalAveragePooling1D()(long_branch)
+
+        merged = Concatenate()([short_pool, long_pool])
+        x = Dense(128, activation="relu")(merged)
+        x = Dropout(0.1)(x)
+        x = Dense(64, activation="relu")(x)
+        outputs = Dense(num_classes, activation="softmax")(x)
+
+        model = Model([short_in, long_in], outputs)
+
+        def focal_loss(y_true, y_pred, gamma: float = 2.0, alpha: float = 0.25):
+            y_true = tf.one_hot(tf.cast(y_true, tf.int32), depth=num_classes)
+            y_pred = tf.clip_by_value(y_pred, 1e-7, 1 - 1e-7)
+            ce = -y_true * tf.math.log(y_pred)
+            weight = alpha * tf.pow(1 - y_pred, gamma)
+            return tf.reduce_sum(weight * ce, axis=-1)
+
+        loss_fn = focal_loss if loss_type == "focal" else "sparse_categorical_crossentropy"
+        optimizer = Adam(learning_rate=1e-3, clipnorm=1.0)
+        model.compile(optimizer=optimizer, loss=loss_fn, metrics=["accuracy"])
+        return model
+
+    def create_dual_gru_model(
+        self,
+        short_shape: Tuple[int, int],
+        long_shape: Tuple[int, int],
+        num_classes: int = 2,
+    ) -> Optional[Model]:
+        """创建双输入GRU模型"""
+
+        if not TENSORFLOW_AVAILABLE:
+            print("TensorFlow未安装，无法创建GRU模型")
+            return None
+
+        short_in = Input(shape=short_shape)
+        short = GRU(96, return_sequences=True, dropout=0.2)(short_in)
+        short = GRU(96, dropout=0.2)(short)
+
+        long_in = Input(shape=long_shape)
+        long = GRU(64, return_sequences=True)(long_in)
+        long = GRU(64)(long)
+
+        merged = Concatenate()([short, long])
+        x = Dense(128, activation="relu")(merged)
+        x = Dropout(0.2)(x)
+        x = Dense(128, activation="relu")(x)
+        outputs = Dense(num_classes, activation="softmax")(x)
+
+        optimizer = Adam(learning_rate=1e-3, clipnorm=1.0)
+        model = Model([short_in, long_in], outputs)
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+        return model
+
+    def create_tiny_transformer_model(
+        self,
+        short_shape: Tuple[int, int],
+        long_shape: Tuple[int, int],
+        num_classes: int = 2,
+    ) -> Optional[Model]:
+        """创建双输入Tiny-Transformer模型"""
+
+        if not TENSORFLOW_AVAILABLE:
+            print("TensorFlow未安装，无法创建Transformer模型")
+            return None
+
+        short_in = Input(shape=short_shape)
+        long_in = Input(shape=long_shape)
+
+        def build_branch(inp: tf.Tensor, ffn_dim: int) -> tf.Tensor:
+            x = Dense(64)(inp)
+
+            class PositionalEncoding(tf.keras.layers.Layer):
+                def __init__(self, d_model: int):
+                    super().__init__()
+                    self.d_model = d_model
+
+                def call(self, x):
+                    pos = tf.range(tf.shape(x)[1], dtype=tf.float32)[:, tf.newaxis]
+                    i = tf.range(self.d_model, dtype=tf.float32)[tf.newaxis, :]
+                    angle_rates = 1 / tf.pow(10000.0, (2 * (i // 2)) / self.d_model)
+                    angle_rads = pos * angle_rates
+                    sines = tf.sin(angle_rads[:, 0::2])
+                    cosines = tf.cos(angle_rads[:, 1::2])
+                    pos_encoding = tf.concat([sines, cosines], axis=-1)
+                    pos_encoding = pos_encoding[tf.newaxis, ...]
+                    return x + pos_encoding
+
+            x = PositionalEncoding(64)(x)
+
+            def transformer_block(x: tf.Tensor, ffn_dim: int) -> tf.Tensor:
+                attn = MultiHeadAttention(num_heads=4, key_dim=64, dropout=0.1)(x, x)
+                attn = Dropout(0.1)(attn)
+                x = LayerNormalization()(Add()([x, attn]))
+                ffn = Dense(ffn_dim, activation="relu", kernel_regularizer=tf.keras.regularizers.l2(1e-5))(x)
+                ffn = Dropout(0.1)(ffn)
+                ffn = Dense(64, kernel_regularizer=tf.keras.regularizers.l2(1e-5))(ffn)
+                x = LayerNormalization()(Add()([x, ffn]))
+                return x
+
+            x = transformer_block(x, ffn_dim)
+            x = transformer_block(x, ffn_dim)
+            return Lambda(lambda t: t[:, 0, :])(x)
+
+        short_pool = build_branch(short_in, 128)
+        long_pool = build_branch(long_in, 256)
+
+        merged = Concatenate()([short_pool, long_pool])
+        x = Dense(128, activation="relu")(merged)
+        x = Dropout(0.1)(x)
+        x = Dense(128, activation="relu")(x)
+        outputs = Dense(num_classes, activation="softmax")(x)
+
+        optimizer = Adam(learning_rate=1e-3, clipnorm=0.5)
+        model = Model([short_in, long_in], outputs)
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+        return model
+
+    def create_model_by_name(
+        self,
+        name: str,
+        short_shape: Tuple[int, int],
+        long_shape: Optional[Tuple[int, int]] = None,
+        num_classes: int = 2,
+    ) -> Optional[Model]:
+        """根据名称创建模型，便于在训练时灵活选择"""
+
+        if name == "tcn":
+            if long_shape is None:
+                raise ValueError("TCN模型需要提供长期分支的输入形状")
+            return self.create_tcn_model(short_shape, long_shape, num_classes)
+        if name == "gru_dual":
+            if long_shape is None:
+                raise ValueError("双GRU模型需要提供长期分支的输入形状")
+            return self.create_dual_gru_model(short_shape, long_shape, num_classes)
+        if name == "tiny_transformer":
+            if long_shape is None:
+                raise ValueError("Tiny-Transformer模型需要提供长期分支的输入形状")
+            return self.create_tiny_transformer_model(short_shape, long_shape, num_classes)
+        if name == "lstm":
+            return self.create_lstm_model(short_shape, num_classes)
+        if name == "gru":
+            return self.create_gru_model(short_shape, num_classes)
+        if name == "cnn_lstm":
+            return self.create_cnn_lstm_model(short_shape, num_classes)
+        raise ValueError(f"未知模型类型: {name}")
     
     def create_gru_model(self, input_shape: Tuple[int, int], num_classes: int = 2) -> Optional[Model]:
         """
@@ -507,6 +720,9 @@ if __name__ == "__main__":
     if TENSORFLOW_AVAILABLE:
         lstm_model = trainer.create_lstm_model((60, 10))  # 60个时间步，10个特征
         gru_model = trainer.create_gru_model((60, 10))
+        # 演示新加入的模型创建方式
+        tcn_model = trainer.create_model_by_name("tcn", (60, 10))
+        tiny_transformer = trainer.create_model_by_name("tiny_transformer", (60, 10))
         print("深度学习模型创建完成")
     
     traditional_models = trainer.create_traditional_models()
