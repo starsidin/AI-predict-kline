@@ -319,30 +319,41 @@ class ModelTrainer:
         return model
 
     def create_dual_gru_model(
-        self, input_shape: Tuple[int, int], num_classes: int = 2
+        self,
+        main_input_shape: Tuple[int, int],
+        aux_input_shape: Tuple[int, int],
+        num_classes: int = 2,
     ) -> Optional[Model]:
-        """创建双分支GRU模型"""
+        """创建双输入GRU模型
+
+        一个分支接收15分钟特征序列, 另一个分支接收运行时计算的
+        均线特征序列。"""
 
         if not TENSORFLOW_AVAILABLE:
             print("TensorFlow未安装，无法创建GRU模型")
             return None
 
-        inputs = Input(shape=input_shape)
-        short = GRU(96, return_sequences=True, dropout=0.2)(inputs)
+        main_inputs = Input(shape=main_input_shape, name="main_input")
+        short = GRU(96, return_sequences=True, dropout=0.2)(main_inputs)
         short = GRU(96, dropout=0.2)(short)
 
-        long = GRU(64, return_sequences=True)(inputs)
-        long = GRU(64)(long)
+        aux_inputs = Input(shape=aux_input_shape, name="aux_input")
+        aux_branch = GRU(64, return_sequences=True)(aux_inputs)
+        aux_branch = GRU(64)(aux_branch)
 
-        merged = Concatenate()([short, long])
+        merged = Concatenate()([short, aux_branch])
         x = Dense(128, activation="relu")(merged)
         x = Dropout(0.2)(x)
         x = Dense(128, activation="relu")(x)
         outputs = Dense(num_classes, activation="softmax")(x)
 
         optimizer = Adam(learning_rate=1e-3, clipnorm=1.0)
-        model = Model(inputs, outputs)
-        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+        model = Model(inputs=[main_inputs, aux_inputs], outputs=outputs)
+        model.compile(
+            optimizer=optimizer,
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"],
+        )
         return model
 
     def create_tiny_transformer_model(
@@ -406,22 +417,26 @@ class ModelTrainer:
         return model
 
     def create_model_by_name(
-        self, name: str, input_shape: Tuple[int, int], num_classes: int = 2
+        self,
+        name: str,
+        input_shape: Tuple[int, int] | Tuple[Tuple[int, int], Tuple[int, int]],
+        num_classes: int = 2,
     ) -> Optional[Model]:
         """根据名称创建模型，便于在训练时灵活选择"""
 
         if name == "tcn":
             return self.create_tcn_model(input_shape, num_classes)
         if name == "gru_dual":
-            return self.create_dual_gru_model(input_shape, num_classes)
+            main_shape, aux_shape = input_shape  # type: ignore[misc]
+            return self.create_dual_gru_model(main_shape, aux_shape, num_classes)
         if name == "tiny_transformer":
-            return self.create_tiny_transformer_model(input_shape, num_classes)
+            return self.create_tiny_transformer_model(input_shape, num_classes)  # type: ignore[arg-type]
         if name == "lstm":
-            return self.create_lstm_model(input_shape, num_classes)
+            return self.create_lstm_model(input_shape, num_classes)  # type: ignore[arg-type]
         if name == "gru":
-            return self.create_gru_model(input_shape, num_classes)
+            return self.create_gru_model(input_shape, num_classes)  # type: ignore[arg-type]
         if name == "cnn_lstm":
-            return self.create_cnn_lstm_model(input_shape, num_classes)
+            return self.create_cnn_lstm_model(input_shape, num_classes)  # type: ignore[arg-type]
         raise ValueError(f"未知模型类型: {name}")
     
     def create_gru_model(self, input_shape: Tuple[int, int], num_classes: int = 2) -> Optional[Model]:
@@ -622,8 +637,40 @@ class ModelTrainer:
         
         self.models[model_name] = model
         self.training_history[model_name] = history.history
-        
+
         return results
+
+    def evaluate_model(
+        self, model: Model, X_test: np.ndarray, y_test: np.ndarray
+    ) -> Dict[str, float]:
+        """在测试集上评估深度学习模型"""
+
+        if not TENSORFLOW_AVAILABLE:
+            print("TensorFlow未安装，无法评估模型")
+            return {}
+
+        loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+        y_proba = model.predict(X_test)
+        y_pred = (
+            np.argmax(y_proba, axis=1)
+            if y_proba.shape[1] > 1
+            else (y_proba > 0.5).astype(int).flatten()
+        )
+        precision = precision_score(y_test, y_pred, average="weighted")
+        recall = recall_score(y_test, y_pred, average="weighted")
+        f1 = f1_score(y_test, y_pred, average="weighted")
+
+        print(
+            f"测试集 - 损失: {loss:.4f}, 准确率: {accuracy:.4f}, F1: {f1:.4f}"
+        )
+
+        return {
+            "loss": loss,
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1,
+        }
     
     def create_trading_environment(self, data: np.ndarray) -> TradingEnvironment:
         """
