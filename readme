@@ -1,0 +1,1 @@
+python backend/data/data_preprocessor.py --input_dir "data/spot_btc_15m_klines" --output_path "data/processed/btcusdt_15m_features.csv" --window_size 20

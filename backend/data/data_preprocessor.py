@@ -300,7 +300,7 @@ class KlinePreprocessor:
         
         # 选择最终特征列
         feature_cols = [
-            'datetime', 'timestamp', 'close',  # 基础信息
+            'datetime', 'timestamp',   #基础信息，移除close列
             'log_ret_scaled', 'hl_range_scaled', 'vol_z_scaled',  # 基础特征
             'atr_norm_scaled', 'log_ret_std_scaled', 'ema_ratio_scaled',  # 技术指标
             'rsi_norm_scaled', 'macd_delta_norm_scaled',  # 更多技术指标
@@ -350,8 +350,7 @@ class KlinePreprocessor:
             try:
                 df_processed = self.preprocess_single_file(file_path)
                 if not df_processed.empty:
-                    # 添加文件来源信息
-                    df_processed['source_file'] = os.path.basename(file_path)
+                    # 不再添加文件来源信息，避免在数据转换时出现问题
                     all_data.append(df_processed)
                     print(f"✓ 成功处理: {os.path.basename(file_path)} ({len(df_processed)} 行)")
                 else:
