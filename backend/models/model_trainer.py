@@ -8,7 +8,7 @@
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 from pathlib import Path
 import joblib
 import json
@@ -55,6 +55,25 @@ try:
 except ImportError:
     GYM_AVAILABLE = False
     print("Gym未安装，强化学习环境将不可用")
+
+DEFAULT_FEATURE_COLUMNS = [
+    "log_ret_scaled",
+    "hl_range_scaled",
+    "vol_z_scaled",
+    "atr_norm_scaled",
+    "log_ret_std_scaled",
+    "ema_ratio_scaled",
+    "rsi_norm_scaled",
+    "macd_delta_norm_scaled",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "dom_sin",
+    "dom_cos",
+    "month_sin",
+    "month_cos",
+]
 
 class TradingEnvironment:
     """
@@ -170,18 +189,72 @@ class ModelTrainer:
     模型训练器
     """
     
-    def __init__(self, model_save_dir: str = "../../models"):
+    def __init__(
+        self,
+        model_save_dir: str = "../../models",
+        feature_columns: Optional[List[str]] = None,
+    ):
         """
         初始化训练器
         
         Args:
             model_save_dir: 模型保存目录
+            feature_columns: 预处理特征列顺序，默认为预处理流水线产出的列顺序
         """
         self.model_save_dir = Path(model_save_dir)
         self.model_save_dir.mkdir(parents=True, exist_ok=True)
         self.models = {}
         self.training_history = {}
-    
+        self.feature_columns = (
+            list(feature_columns)
+            if feature_columns is not None
+            else list(DEFAULT_FEATURE_COLUMNS)
+        )
+
+    def _prepare_features(self, data: Any):
+        """将输入数据转换为numpy数组并按特征顺序排列"""
+        if isinstance(data, (list, tuple)):
+            return [self._prepare_features(item) for item in data]
+        if isinstance(data, pd.DataFrame):
+            available = [col for col in self.feature_columns if col in data.columns]
+            if not available:
+                numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+                if not numeric_cols:
+                    raise ValueError("DataFrame中没有可用的数值特征列")
+                available = numeric_cols
+            return data[available].to_numpy(dtype=np.float32)
+        if isinstance(data, pd.Series):
+            return data.to_numpy(dtype=np.float32)
+        array = np.asarray(data)
+        if array.dtype == np.float64:
+            array = array.astype(np.float32)
+        return array
+
+    def _prepare_targets(self, data: Any):
+        """确保标签数据为合适的numpy数组"""
+        if isinstance(data, pd.DataFrame):
+            array = data.iloc[:, 0].to_numpy()
+        elif isinstance(data, pd.Series):
+            array = data.to_numpy()
+        else:
+            array = np.asarray(data)
+        if array.ndim == 2 and array.shape[1] == 1:
+            array = array[:, 0]
+        if array.ndim == 1:
+            if array.dtype == bool:
+                array = array.astype(np.int64)
+            elif np.issubdtype(array.dtype, np.integer):
+                array = array.astype(np.int64)
+            elif np.issubdtype(array.dtype, np.floating):
+                if np.all(np.isclose(array, np.round(array))):
+                    array = np.round(array).astype(np.int64)
+                else:
+                    array = array.astype(np.float32)
+        else:
+            if np.issubdtype(array.dtype, np.floating):
+                array = array.astype(np.float32)
+        return array
+
     def create_traditional_models(self) -> Dict[str, Any]:
         """
         创建传统机器学习模型
@@ -519,6 +592,14 @@ class ModelTrainer:
         Returns:
             训练结果
         """
+        X_train = self._prepare_features(X_train)
+        X_val = self._prepare_features(X_val)
+        y_train = self._prepare_targets(y_train)
+        y_val = self._prepare_targets(y_val)
+
+        if isinstance(X_train, (list, tuple)) or isinstance(X_val, (list, tuple)):
+            raise ValueError("传统机器学习模型不支持多输入特征，请提供单输入特征数组。")
+
         # 将序列数据展平（如果是3D）
         if len(X_train.shape) == 3:
             X_train_flat = X_train.reshape(X_train.shape[0], -1)
@@ -586,6 +667,11 @@ class ModelTrainer:
             print("TensorFlow未安装，无法训练深度学习模型")
             return {}
         
+        X_train = self._prepare_features(X_train)
+        X_val = self._prepare_features(X_val)
+        y_train = self._prepare_targets(y_train)
+        y_val = self._prepare_targets(y_val)
+
         print(f"训练 {model_name} 模型...")
         
         # 回调函数
@@ -648,6 +734,9 @@ class ModelTrainer:
         if not TENSORFLOW_AVAILABLE:
             print("TensorFlow未安装，无法评估模型")
             return {}
+
+        X_test = self._prepare_features(X_test)
+        y_test = self._prepare_targets(y_test)
 
         loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
         y_proba = model.predict(X_test)
