@@ -2,6 +2,32 @@ import numpy as np
 import pandas as pd
 from typing import Tuple
 
+EXPECTED_COLUMNS = [
+    "datetime",
+    "timestamp",
+    "log_ret_scaled",
+    "hl_range_scaled",
+    "vol_z_scaled",
+    "atr_norm_scaled",
+    "log_ret_std_scaled",
+    "ema_ratio_scaled",
+    "rsi_norm_scaled",
+    "macd_delta_norm_scaled",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "dom_sin",
+    "dom_cos",
+    "month_sin",
+    "month_cos",
+]
+
+FEATURE_COLUMNS = [
+    col for col in EXPECTED_COLUMNS if col not in ("datetime", "timestamp")
+]
+TARGET_COLUMN = "log_ret_scaled"
+
 
 def load_dual_branch_dataset(
     csv_path: str,
@@ -12,55 +38,32 @@ def load_dual_branch_dataset(
     ma_4h_steps: int = 6,
     ma_24h_steps: int = 5,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Load 15m kline features and construct dual-branch dataset.
+    """Load dual-branch dataset using the real preprocessed features.
 
-    The main branch uses sequential 15m features. The auxiliary branch is
-    built on-the-fly by computing 4-hour and 24-hour moving averages and
-    collecting the most recent ``ma_4h_steps`` and ``ma_24h_steps`` values
-    respectively.
-
-    Args:
-        csv_path: Path to ``btcusdt_15m_features.csv``.
-        seq_len: Length of the main 15m feature sequence.
-        test_ratio: Fraction of samples reserved for the test set (taken
-            from the tail of the time series).
-        ma_4h_window: Number of 15m candles in a 4‑hour window (default 16).
-        ma_24h_window: Number of 15m candles in a 24‑hour window (default 96).
-        ma_4h_steps: Number of past 4‑hour averages to keep (default 6 → 1 day).
-        ma_24h_steps: Number of past 24‑hour averages to keep (default 5 → 5 days).
-
-    Returns:
-        Tuple of training and testing arrays:
-        ``(X_train_main, X_train_aux, y_train, X_test_main, X_test_aux, y_test)``
+    The main branch uses sequential 15m features provided by the
+    preprocessing pipeline. The auxiliary branch is built by computing
+    rolling averages of the *actual* ``log_ret_scaled`` values over
+    4-hour and 24-hour windows, avoiding any synthetic price series.
     """
+
     df = pd.read_csv(csv_path)
     df = df.sort_values("timestamp").reset_index(drop=True)
-    
-    # 由于data_preprocessor.py已移除close列，我们需要从原始数据中计算或加载close值
-    # 这里我们使用log_ret_scaled特征的累积和来近似表示价格变化趋势
-    feature_cols = [c for c in df.columns if c not in ["datetime", "timestamp"]]
-    data_main = df[feature_cols].values.astype(np.float32)
-    
-    # 使用log_ret_scaled作为价格变化的指标
-    if "log_ret_scaled" in df.columns:
-        price_change = df["log_ret_scaled"].values
-        # 创建一个起始价格为100的虚拟价格序列
-        base_price = 100
-        close = np.zeros(len(price_change))
-        close[0] = base_price
-        for i in range(1, len(price_change)):
-            # 使用tanh的反函数来还原实际的对数收益率
-            # 注意：这是一个近似值，因为原始数据已经过多次转换
-            close[i] = close[i-1] * (1 + price_change[i] * 0.01)  # 缩小变化幅度
-    else:
-        # 如果没有log_ret_scaled，创建一个虚拟的价格序列
-        print("警告：找不到log_ret_scaled列，使用虚拟价格序列")
-        close = np.linspace(100, 110, len(df)).astype(np.float32)
 
-    # Moving averages
-    ma_4h = pd.Series(close).rolling(window=ma_4h_window).mean()
-    ma_24h = pd.Series(close).rolling(window=ma_24h_window).mean()
+    missing_cols = [col for col in EXPECTED_COLUMNS if col not in df.columns]
+    if missing_cols:
+        raise ValueError(
+            f"数据集中缺少以下列: {', '.join(missing_cols)}"
+        )
+
+    data_main = df[FEATURE_COLUMNS].to_numpy(dtype=np.float32)
+    target_series = df[TARGET_COLUMN].astype(np.float32)
+
+    # Auxiliary branch uses real rolling statistics of the log returns
+    ma_4h = target_series.rolling(window=ma_4h_window).mean()
+    ma_24h = target_series.rolling(window=ma_24h_window).mean()
     ma_total_steps = ma_4h_steps + ma_24h_steps
+
+    future_returns = target_series.shift(-1)
 
     X_main, X_aux, y = [], [], []
     start_idx = max(
@@ -71,13 +74,27 @@ def load_dual_branch_dataset(
 
     for i in range(start_idx, len(df) - 1):
         seq_main = data_main[i - seq_len + 1 : i + 1]
-        seq4 = ma_4h.iloc[i - ma_4h_steps + 1 : i + 1].values
-        seq24 = ma_24h.iloc[i - ma_24h_steps + 1 : i + 1].values
-        if np.isnan(seq4).any() or np.isnan(seq24).any():
+        if np.isnan(seq_main).any():
             continue
+
+        seq4 = ma_4h.iloc[i - ma_4h_steps + 1 : i + 1].to_numpy(dtype=np.float32)
+        seq24 = ma_24h.iloc[i - ma_24h_steps + 1 : i + 1].to_numpy(dtype=np.float32)
+        if (
+            seq4.shape[0] != ma_4h_steps
+            or seq24.shape[0] != ma_24h_steps
+            or np.isnan(seq4).any()
+            or np.isnan(seq24).any()
+        ):
+            continue
+
+        future_ret = future_returns.iloc[i]
+        if pd.isna(future_ret):
+            continue
+
         X_main.append(seq_main)
-        X_aux.append(np.concatenate([seq4, seq24]).reshape(ma_total_steps, 1))
-        y.append(int(close[i + 1] > close[i]))
+        aux_features = np.concatenate([seq4, seq24]).astype(np.float32)
+        X_aux.append(aux_features.reshape(ma_total_steps, 1))
+        y.append(int(future_ret > 0))
 
     X_main = np.array(X_main, dtype=np.float32)
     X_aux = np.array(X_aux, dtype=np.float32)
