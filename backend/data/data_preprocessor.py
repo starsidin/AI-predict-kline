@@ -300,7 +300,8 @@ class KlinePreprocessor:
         
         # 选择最终特征列
         feature_cols = [
-            'datetime', 'timestamp',   #基础信息，移除close列
+            'datetime', 'timestamp',   # 基础信息
+            'close', 'high',           # 原始价格，用于构建分类标签
             'log_ret_scaled', 'hl_range_scaled', 'vol_z_scaled',  # 基础特征
             'atr_norm_scaled', 'log_ret_std_scaled', 'ema_ratio_scaled',  # 技术指标
             'rsi_norm_scaled', 'macd_delta_norm_scaled',  # 更多技术指标
@@ -378,7 +379,9 @@ class KlinePreprocessor:
         
         print(f"\n预处理完成!")
         print(f"总行数: {len(combined_df)}")
-        print(f"特征数: {len(combined_df.columns) - 3}")
+        non_feature_cols = {'datetime', 'timestamp', 'close', 'high'}
+        feature_count = len([col for col in combined_df.columns if col not in non_feature_cols])
+        print(f"特征数: {feature_count}")
         print(f"时间范围: {combined_df['datetime'].min()} 到 {combined_df['datetime'].max()}")
         print(f"输出文件: {output_path}")
         
